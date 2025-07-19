@@ -56,19 +56,15 @@ edge-tts --list-voices
 2. Go to the Custom Shortcuts tab
 3. Click Add custom shortcut
 4. Enter the following:
-
-  Name: Start TTS
-
-  Command: python3 /full/path/to/start.py en-US-EmmaNeural
+   - Name: Start TTS
+   - Command: python3 /full/path/to/start.py en-US-EmmaNeural
 5. Click Apply, then assign a key combination (e.g., Ctrl+Alt+Q)
 
 ### Stop Reading (Assign a Shortcut)
 
 1. Repeat the steps above to add another shortcut:
-
-  Name: Stop TTS
-  
-  Command: python3 /full/path/to/stop.py
+   - Name: Stop TTS
+   - Command: python3 /full/path/to/stop.py
 2. Assign a different key combination (e.g., Ctrl+Alt+E)
 
 These shortcuts allow you to start and stop TTS playback from anywhere on your desktop environment.
