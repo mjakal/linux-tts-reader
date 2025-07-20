@@ -2,7 +2,7 @@
 
 A simple Python-based text-to-speech (TTS) tool that reads selected text from your clipboard using Microsoft's Edge Neural voices via the `edge-tts` library. It supports background playback and can be controlled via keyboard shortcuts.
 
-## 🔧 Features
+## Features
 
 - Text-to-speech using Microsoft's `edge-tts`
 - Reads selected (primary) text from clipboard
@@ -45,7 +45,7 @@ python3 start.py en-US-EmmaNeural
 You can list all available voices using:
 
 ```
-edge-tts --list-voices
+python3 reader.py -l
 ```
 
 ## Setting Up Keyboard Shortcuts (Linux Mint Cinnamon)
@@ -57,14 +57,14 @@ edge-tts --list-voices
 3. Click Add custom shortcut
 4. Enter the following:
    - Name: Start TTS
-   - Command: python3 /full/path/to/start.py en-US-EmmaNeural
+   - Command: python3 /full/path/to/reader.py -v en-US-EmmaNeural
 5. Click Apply, then assign a key combination (e.g., Ctrl+Alt+Q)
 
 ### Stop Reading (Assign a Shortcut)
 
 1. Repeat the steps above to add another shortcut:
    - Name: Stop TTS
-   - Command: python3 /full/path/to/stop.py
+   - Command: python3 /full/path/to/reader.py -s
 2. Assign a different key combination (e.g., Ctrl+Alt+E)
 
 These shortcuts allow you to start and stop TTS playback from anywhere on your desktop environment.
