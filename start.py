@@ -13,25 +13,37 @@ import re
 import atexit
 import shutil
 import signal
-from concurrent.futures import ThreadPoolExecutor
+import json
+import socket
 
-# === PID File for External Stop Control ===
+# === Config & State ===
 pid_file = "/tmp/edge_tts_reader.pid"
+mpv_socket_path = "/tmp/mpv_socket"
+temp_dir = tempfile.mkdtemp()
+mpv_process = None
+
+# === Save PID ===
 with open(pid_file, "w") as f:
     f.write(str(os.getpid()))
 
-mpv_processes = []
-temp_dir = tempfile.mkdtemp()
-
-# === Cleanup Resources on Exit ===
+# === Cleanup Function ===
 def cleanup():
-    print("\nCleaning up...")
-    for proc in mpv_processes:
+    global mpv_process
+    print("Cleaning up...")
+    if mpv_process:
         try:
-            proc.terminate()
+            mpv_process.terminate()
+            mpv_process.wait(timeout=5)
         except Exception:
-            pass
-    shutil.rmtree(temp_dir, ignore_errors=True)
+            try:
+                mpv_process.kill()
+                mpv_process.wait()
+            except Exception:
+                pass
+    if os.path.exists(mpv_socket_path):
+        os.remove(mpv_socket_path)
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
     if os.path.exists(pid_file):
         os.remove(pid_file)
 
@@ -39,49 +51,108 @@ atexit.register(cleanup)
 signal.signal(signal.SIGINT, lambda sig, frame: sys.exit(0))
 signal.signal(signal.SIGTERM, lambda sig, frame: sys.exit(0))
 
-# === Get voice id from script argument ===
+# === Voice Selection ===
 voice_id = sys.argv[1] if len(sys.argv) > 1 else "en-US-EmmaNeural"
 
-# === Get Clipboard Text ===
-selected_text = subprocess.check_output(
-    ['xclip', '-out', '-selection', 'primary']
-).decode('utf-8').strip()
+# === Clipboard Input ===
+selected_text = subprocess.check_output(['xclip', '-out', '-selection', 'primary']).decode('utf-8').strip()
 
-# === Split Text into Sentences ===
+# === Sentence Splitting ===
 def split_into_sentences(text):
     return re.split(r'(?<=[.!?]) +', text.strip())
 
-sentences = split_into_sentences(selected_text)
+sentences = [s for s in split_into_sentences(selected_text) if s.strip()]
 
-# === Async TTS + Playback ===
+# === MPV IPC Helpers ===
+async def send_ipc_command(sock, command_dict):
+    command_str = json.dumps(command_dict) + "\n"
+    await asyncio.get_event_loop().sock_sendall(sock, command_str.encode())
+
+async def listen_until_done(sock, total_chunks):
+    last_played_index = -1
+    while True:
+        try:
+            data = await asyncio.get_event_loop().sock_recv(sock, 4096)
+        except ConnectionResetError:
+            return
+
+        for line in data.splitlines():
+            try:
+                msg = json.loads(line.decode() if isinstance(line, bytes) else line)
+                if msg.get("event") == "property-change" and msg.get("name") == "playlist-pos":
+                    last_played_index = msg.get("data", last_played_index)
+                elif msg.get("event") == "end-file":
+                    if last_played_index == total_chunks - 1:
+                        return
+            except Exception:
+                continue
+
+# === Main Async Flow ===
 async def synthesize_and_play(sentences, voice_id):
+    global mpv_process
     loop = asyncio.get_event_loop()
-    executor = ThreadPoolExecutor()
-    tasks = []
+    audio_paths = [None] * len(sentences)
+    ready_events = [asyncio.Event() for _ in sentences]
 
-    async def synthesize(index, sentence):
-        output_path = os.path.join(temp_dir, f"chunk_{index}.mp3")
-        communicate = edge_tts.Communicate(text=sentence, voice=voice_id)
-        await communicate.save(output_path)
-        return index, output_path
+    # Launch mpv
+    if os.path.exists(mpv_socket_path):
+        os.remove(mpv_socket_path)
 
-    # Synthesize all sentences asynchronously
-    for idx, sentence in enumerate(sentences):
-        if sentence.strip():
-            tasks.append(synthesize(idx, sentence))
+    mpv_process = subprocess.Popen([
+        "mpv",
+        "--no-terminal",
+        "--quiet",
+        "--idle=yes",
+        f"--input-ipc-server={mpv_socket_path}"
+    ])
 
-    results = await asyncio.gather(*tasks)
-    sorted_results = sorted(results, key=lambda x: x[0])
+    # Wait for socket
+    for _ in range(50):
+        if os.path.exists(mpv_socket_path):
+            break
+        await asyncio.sleep(0.1)
+    else:
+        print("Error: MPV socket not created.")
+        return
 
-    # Play each chunk using mpv (sequentially)
-    for _, path in sorted_results:
-        print(f"Playing: {os.path.basename(path)}")
-        proc = subprocess.Popen([
-            "mpv", "--no-terminal", "--really-quiet", path
-        ])
-        mpv_processes.append(proc)
-        proc.wait()
+    # Connect to socket
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.setblocking(False)
+    await loop.sock_connect(sock, mpv_socket_path)
 
-# === Run Main ===
+    # Monitor playlist position
+    await send_ipc_command(sock, {
+        "command": ["observe_property", 1, "playlist-pos"]
+    })
+
+    # Start synthesis
+    async def synth(index, text):
+        path = os.path.join(temp_dir, f"chunk_{index}.mp3")
+        communicate = edge_tts.Communicate(text=text, voice=voice_id)
+        await communicate.save(path)
+        audio_paths[index] = path
+        ready_events[index].set()
+
+    synth_tasks = [asyncio.create_task(synth(i, s)) for i, s in enumerate(sentences)]
+
+    for i in range(len(sentences)):
+        await ready_events[i].wait()
+        await send_ipc_command(sock, {
+            "command": ["loadfile", audio_paths[i], "append-play"]
+        })
+        print(f"Appended chunk {i}")
+
+    await asyncio.gather(*synth_tasks)
+    await listen_until_done(sock, len(sentences))
+
+    sock.close()
+
+    mpv_process.terminate()
+    try:
+        mpv_process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        mpv_process.kill()
+        mpv_process.wait()
+
+# === Run ===
 asyncio.run(synthesize_and_play(sentences, voice_id))
-
