@@ -39,7 +39,7 @@ cd linux-tts-reader
 Copy any text to your primary clipboard (select it with your mouse).
 
 ```
-python3 start.py en-US-EmmaNeural
+python3 reader.py -v en-US-EmmaNeural
 ```
 
 You can list all available voices using:
