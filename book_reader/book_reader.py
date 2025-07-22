@@ -3,7 +3,7 @@
 
 """
 A robust script to convert a text file into an audiobook,
-with a resume feature and universal text cleaning.
+using atomic file writes to ensure integrity across any interruption.
 """
 
 import asyncio
@@ -14,9 +14,8 @@ import subprocess
 import argparse
 import logging
 import json
-import signal
-import atexit
 import re
+import shutil
 from pathlib import Path
 from typing import List
 
@@ -32,6 +31,7 @@ DEFAULT_VOICE = "en-US-EmmaNeural"
 CHARS_PER_PAGE = 2500
 MAX_RETRIES = 3
 RETRY_DELAY_S = 5
+UNWANTED_CHARS_PATTERN = r'[<>[\]{}|\\\/@#$%^&*_+=~]'
 
 
 class BookConverter:
@@ -47,19 +47,8 @@ class BookConverter:
         self.pages_per_file = pages_per_file
         self.pages: List[str] = []
         self.next_page_index = 0
-        self._cleaned_up = False
-
-        def signal_handler(sig, frame):
-            logging.warning(f"Interrupt signal ({signal.strsignal(sig)}) received. Shutting down gracefully.")
-            self.cleanup()
-            sys.exit(0)
-
-        atexit.register(self.cleanup)
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
 
     def _check_ffmpeg(self):
-        """Checks if ffmpeg is installed and accessible."""
         try:
             subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
             return True
@@ -68,18 +57,15 @@ class BookConverter:
             return False
 
     def _prepare_directories(self):
-        """Creates the necessary output and temporary directories."""
         self.output_dir.mkdir(exist_ok=True)
         self.temp_dir.mkdir(exist_ok=True)
     
-    def cleanup(self):
-        """Cleans up temporary files. Leaves state file for resume."""
-        if self._cleaned_up:
-            return
-        logging.info("Running cleanup...")
+    def _final_cleanup(self):
+        """Performs cleanup ONLY after a fully successful conversion."""
+        logging.info("Running final cleanup of temporary files and state...")
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir, ignore_errors=True)
-        self._cleaned_up = True
+        self.state_file_path.unlink(missing_ok=True)
     
     def _save_state(self):
         """Saves the current conversion state to the JSON file."""
@@ -112,27 +98,16 @@ class BookConverter:
             return False
 
     def _clean_text(self, content: str) -> str:
-        """A simple cleaner to remove unwanted characters and normalize whitespace."""
         logging.info("Cleaning book content...")
-        
-        # 1. Remove characters that are not letters, numbers, standard punctuation, or whitespace.
-        # This keeps the original text content but removes obscure symbols.
-        allowed_chars_pattern = r"[^a-zA-Z0-9\s.,?!'-]"
-        cleaned_content = re.sub(allowed_chars_pattern, "", content)
-        
-        # 2. Normalize all whitespace (multiple spaces, newlines, tabs) into a single space.
+        cleaned_content = re.sub(UNWANTED_CHARS_PATTERN, "", content)
         whitespace_pattern = r"\s+"
         normalized_content = re.sub(whitespace_pattern, " ", cleaned_content).strip()
-        
         return normalized_content
 
     def _split_book_into_pages(self):
-        """Reads the book, cleans the text, and splits it into pages."""
         try:
             logging.info(f"Reading book from: {self.book_path}")
             raw_content = self.book_path.read_text(encoding='utf-8')
-            
-            # Use the simple helper function to clean the text
             normalized_content = self._clean_text(raw_content)
             
             pages_list = []
@@ -155,27 +130,47 @@ class BookConverter:
             
             self.pages = pages_list
             logging.info(f"Book split into {len(self.pages)} cleaned pages.")
-            
         except FileNotFoundError:
             logging.error(f"Book file not found at: {self.book_path}")
             self.pages = []
 
     async def _synthesize_page(self, text: str, output_path: Path) -> bool:
-        """Synthesizes a single page of text to an MP3 file with retries."""
+        """
+        Synthesizes a page using an atomic write pattern (write to .tmp, then rename)
+        to ensure file integrity against any type of interruption.
+        """
+        tmp_path = output_path.with_suffix(output_path.suffix + '.tmp')
+        
         for attempt in range(MAX_RETRIES):
             try:
                 communicate = edge_tts.Communicate(text=text, voice=self.voice)
-                await communicate.save(str(output_path))
+                await communicate.save(str(tmp_path))
+                
+                # --- ATOMIC OPERATION ---
+                # If synthesis is successful, rename the .tmp file to the final name.
+                # This is an atomic operation on most filesystems.
+                tmp_path.rename(output_path)
                 return True
             except Exception as e:
+                # If any error occurs (including KeyboardInterrupt), clean up the partial file.
+                tmp_path.unlink(missing_ok=True)
                 logging.warning(f"Attempt {attempt + 1}/{MAX_RETRIES} failed for {output_path.name}: {e}")
                 if attempt < MAX_RETRIES - 1:
                     await asyncio.sleep(RETRY_DELAY_S)
+                else:
+                    # If this was the last retry, re-raise the exception so the main loop can handle it.
+                    if isinstance(e, KeyboardInterrupt):
+                        raise
+        
         logging.error(f"All {MAX_RETRIES} attempts failed for {output_path.name}. Skipping.")
         return False
 
     def _merge_pages_to_part(self, part_index: int, page_files: List[Path]):
         """Merges a list of page MP3s into a single part file using ffmpeg."""
+        if not page_files:
+            logging.warning(f"No pages to merge for part {part_index}. Skipping.")
+            return
+
         part_filename = self.output_dir / f"part_{part_index:02d}.mp3"
         file_list_path = self.temp_dir / "filelist.txt"
 
@@ -188,56 +183,64 @@ class BookConverter:
         result = subprocess.run(command, capture_output=True, text=True)
         
         if result.returncode != 0:
-            logging.error(f"ffmpeg failed for {part_filename.name}:\n{result.stderr}")
+            logging.critical(f"ffmpeg failed for {part_filename.name}. Halting conversion.")
+            logging.critical(f"ffmpeg stderr:\n{result.stderr}")
+            sys.exit(1)
         else:
             logging.info(f"Successfully created {part_filename.name}")
 
     async def convert(self, continue_run=False):
-        """Main execution flow for the conversion process."""
         if not self._check_ffmpeg(): return
-        self._prepare_directories()
-
+        
         if continue_run:
+            self._prepare_directories()
             if not self._load_state(): return
             logging.info(f"Resuming conversion from page {self.next_page_index + 1}/{len(self.pages)}")
         else:
+            if self.temp_dir.exists():
+                shutil.rmtree(self.temp_dir)
+            self._prepare_directories()
             self._split_book_into_pages()
             if not self.pages: return
             self._save_state()
 
-        current_part_page_files = []
-        current_part_start_page = self.next_page_index
+        current_part_start_page = (self.next_page_index // self.pages_per_file) * self.pages_per_file
         
         for i in range(self.next_page_index, len(self.pages)):
-            if (i - current_part_start_page) > 0 and (i - current_part_start_page) % self.pages_per_file == 0:
+            if i > current_part_start_page and (i % self.pages_per_file) == 0:
                 part_index = (current_part_start_page // self.pages_per_file) + 1
-                if current_part_page_files:
-                    self._merge_pages_to_part(part_index, current_part_page_files)
-                for f in current_part_page_files: f.unlink()
-                current_part_page_files = []
+                pages_for_this_part = [
+                    self.temp_dir / f"page_{p:04d}.mp3" 
+                    for p in range(current_part_start_page, i)
+                    if (self.temp_dir / f"page_{p:04d}.mp3").exists()
+                ]
+                self._merge_pages_to_part(part_index, pages_for_this_part)
                 current_part_start_page = i
 
-            page_text = self.pages[i]
             page_filename = self.temp_dir / f"page_{i:04d}.mp3"
-            logging.info(f"Synthesizing page {i + 1}/{len(self.pages)}...")
-            if await self._synthesize_page(page_text, page_filename):
-                current_part_page_files.append(page_filename)
-                
+
+            if page_filename.exists():
+                logging.info(f"Page {i + 1}/{len(self.pages)} already exists. Skipping synthesis.")
+                synthesis_successful = True
+            else:
+                logging.info(f"Synthesizing page {i + 1}/{len(self.pages)}...")
+                synthesis_successful = await self._synthesize_page(self.pages[i], page_filename)
+            
+            if synthesis_successful:
                 self.next_page_index = i + 1
                 self._save_state()
 
-        if current_part_page_files:
+        final_pages_for_part = [
+            self.temp_dir / f"page_{p:04d}.mp3" 
+            for p in range(current_part_start_page, len(self.pages))
+            if (self.temp_dir / f"page_{p:04d}.mp3").exists()
+        ]
+        if final_pages_for_part:
             part_index = (current_part_start_page // self.pages_per_file) + 1
-            self._merge_pages_to_part(part_index, current_part_page_files)
-        for f in current_part_page_files: f.unlink()
+            self._merge_pages_to_part(part_index, final_pages_for_part)
         
         logging.info("--- Audiobook conversion complete! ---")
-        self.state_file_path.unlink(missing_ok=True)
-        (self.temp_dir / "filelist.txt").unlink(missing_ok=True)
-        try:
-            self.temp_dir.rmdir()
-        except OSError as e:
-            logging.warning(f"Could not remove temp directory {self.temp_dir}. It may not be empty. Error: {e}")
+        self._final_cleanup()
 
 def main():
     parser = argparse.ArgumentParser(
@@ -268,7 +271,7 @@ def main():
     try:
         asyncio.run(run_task)
     except KeyboardInterrupt:
-        logging.info("Process interrupted by user. State saved for resume.")
+        logging.info("\nProcess interrupted by user. State saved for resume.")
     except Exception as e:
         logging.critical(f"A critical error occurred: {e}")
 
