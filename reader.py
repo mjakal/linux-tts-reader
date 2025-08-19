@@ -13,7 +13,6 @@ import os
 import re
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -100,7 +99,6 @@ class TTSPlayer:
             return True
         except FileNotFoundError:
             logging.error("The 'edge-tts' command was not found. Is it installed with pipx and in your PATH?")
-            # We exit here because the script cannot function without edge-tts
             sys.exit(1)
         except Exception as e:
             logging.error(f"Failed to synthesize chunk with subprocess for path {output_path}: {e}")
@@ -126,7 +124,6 @@ class TTSPlayer:
             "--no-terminal",
             "--really-quiet",
             "--no-audio-display",
-            "--no-terminal",
             str(first_chunk_path),
             f"--input-ipc-server={MPV_SOCKET_PATH}"
         )
@@ -158,7 +155,8 @@ class TTSPlayer:
         for i, sentence in enumerate(sentences, start=1):
             chunk_path = self.temp_dir / f"chunk_{i}.mp3"
             if await self._synthesize_chunk(sentence, chunk_path):
-                command = {"command": ["loadfile", str(chunk_path), "append"]}
+                # Use append-play instead of append
+                command = {"command": ["loadfile", str(chunk_path), "append-play"]}
                 payload = (json.dumps(command) + "\n").encode()
                 writer.write(payload)
                 await writer.drain()
