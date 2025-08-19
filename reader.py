@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 
 """
-A self-contained, real-time text-to-speech script using edge-tts and mpv.
+A self-contained, real-time text-to-speech script using the edge-tts command-line tool and mpv.
 Can be started, stopped, and managed with command-line arguments.
+Relies on pipx for edge-tts installation.
 """
 
 import asyncio
-import edge_tts
 import json
 import os
 import re
@@ -38,7 +38,7 @@ class TTSPlayer:
     def __init__(self, voice: str):
         self.voice = voice
         self.temp_dir = Path(tempfile.mkdtemp(prefix="tts_player_"))
-        self.mpv_process: subprocess.Popen | None = None
+        self.mpv_process: asyncio.subprocess.Process | None = None
         self.sentences: list[str] = []
         self._cleaned_up = False
 
@@ -67,14 +67,10 @@ class TTSPlayer:
         if self._cleaned_up:
             return
         logging.info("Cleaning up resources...")
-        if self.mpv_process and self.mpv_process.poll() is None:
+        if self.mpv_process and self.mpv_process.returncode is None:
             logging.info(f"Terminating mpv process (PID: {self.mpv_process.pid})")
             try:
                 self.mpv_process.terminate()
-                self.mpv_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.mpv_process.kill()
-                self.mpv_process.wait()
             except Exception as e:
                 logging.error(f"Error during mpv cleanup: {e}")
         
@@ -84,12 +80,30 @@ class TTSPlayer:
         self._cleaned_up = True
 
     async def _synthesize_chunk(self, text: str, output_path: Path):
+        """Synthesizes a text chunk using the edge-tts command-line tool."""
+        command = [
+            "edge-tts",
+            "--voice", self.voice,
+            "--text", text,
+            "--write-media", str(output_path),
+        ]
         try:
-            communicate = edge_tts.Communicate(text=text, voice=self.voice)
-            await communicate.save(str(output_path))
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logging.error(f"edge-tts failed for chunk '{text[:20]}...': {stderr.decode()}")
+                return False
             return True
+        except FileNotFoundError:
+            logging.error("The 'edge-tts' command was not found. Is it installed with pipx and in your PATH?")
+            # We exit here because the script cannot function without edge-tts
+            sys.exit(1)
         except Exception as e:
-            logging.error(f"Failed to synthesize chunk for path {output_path}: {e}")
+            logging.error(f"Failed to synthesize chunk with subprocess for path {output_path}: {e}")
             return False
 
     async def run(self):
@@ -107,17 +121,17 @@ class TTSPlayer:
         
         logging.info("First chunk synthesized. Launching mpv...")
         MPV_SOCKET_PATH.unlink(missing_ok=True)
-        self.mpv_process = subprocess.Popen([
+        self.mpv_process = await asyncio.create_subprocess_exec(
             "mpv", "--no-terminal", "--quiet", str(first_chunk_path),
             f"--input-ipc-server={MPV_SOCKET_PATH}"
-        ])
+        )
 
         if len(self.sentences) > 1:
             await self._stream_remaining_chunks(self.sentences[1:], loop)
         
         logging.info("All chunks queued. Waiting for mpv to finish playback...")
         if self.mpv_process:
-            await loop.run_in_executor(None, self.mpv_process.wait)
+            await self.mpv_process.wait()
         logging.info("Playback finished and mpv has exited.")
 
     async def _stream_remaining_chunks(self, sentences: list, loop):
@@ -130,9 +144,7 @@ class TTSPlayer:
             return
         
         try:
-            ipc_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            ipc_socket.setblocking(False)
-            await loop.sock_connect(ipc_socket, str(MPV_SOCKET_PATH))
+            reader, writer = await asyncio.open_unix_connection(str(MPV_SOCKET_PATH))
         except Exception as e:
             logging.error(f"Could not connect to mpv socket: {e}")
             return
@@ -143,16 +155,28 @@ class TTSPlayer:
             if await self._synthesize_chunk(sentence, chunk_path):
                 command = {"command": ["loadfile", str(chunk_path), "append"]}
                 payload = (json.dumps(command) + "\n").encode()
-                await loop.sock_sendall(ipc_socket, payload)
+                writer.write(payload)
+                await writer.drain()
                 logging.info(f"Appended chunk {i + 1}/{total_chunks}")
-        ipc_socket.close()
+        writer.close()
+        await writer.wait_closed()
 
 async def list_voices():
-    """Lists all available voices from edge-tts."""
-    print("Available voices:")
-    voices = await edge_tts.list_voices()
-    for voice in sorted(voices, key=lambda v: v["ShortName"]):
-        print(f"  - {voice['ShortName']:<20} {voice['Gender']:<8} {voice['Locale']}")
+    """Lists all available voices by calling the edge-tts command."""
+    print("Available voices (via 'edge-tts --list-voices'):")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "edge-tts", "--list-voices",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            logging.error(f"Failed to list voices: {stderr.decode()}")
+            return
+        print(stdout.decode().strip())
+    except FileNotFoundError:
+        logging.error("The 'edge-tts' command was not found. Is it installed with pipx and in your PATH?")
 
 def stop_existing_instance():
     """Finds and stops any running instance of this script using pkill."""
@@ -167,13 +191,21 @@ def stop_existing_instance():
     else:
         logging.info("No running reader process found.")
 
+def check_dependencies():
+    """Checks if required command-line tools are installed and in the PATH."""
+    dependencies = ["mpv", "xclip", "edge-tts", "pkill"]
+    missing = [cmd for cmd in dependencies if not shutil.which(cmd)]
+    if missing:
+        logging.critical(f"Missing required command-line tools: {', '.join(missing)}")
+        logging.critical("Please install them. 'edge-tts' should be installed via 'pipx'.")
+        sys.exit(1)
+
 def main():
     """Main entry point with argument parsing to control behavior."""
     parser = argparse.ArgumentParser(
         description="A tool to read clipboard text aloud, list voices, or stop a running instance.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    # Use a mutually exclusive group for actions that don't start the player
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
         "-s", "--stop",
@@ -185,7 +217,6 @@ def main():
         action="store_true",
         help="List all available voices and exit."
     )
-    # The voice argument is for the default "run" action
     parser.add_argument(
         "-v", "--voice",
         default=DEFAULT_VOICE,
@@ -194,12 +225,12 @@ def main():
     args = parser.parse_args()
 
     # --- Main Control Flow ---
+    check_dependencies()
     if args.stop:
         stop_existing_instance()
     elif args.list_voices:
         asyncio.run(list_voices())
     else:
-        # Default action: run the TTS player
         player = TTSPlayer(voice=args.voice)
         try:
             logging.info(f"Starting TTS player with voice: {args.voice}")

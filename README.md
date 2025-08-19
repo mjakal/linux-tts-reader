@@ -22,7 +22,7 @@ A simple Python-based text-to-speech (TTS) tool that reads selected text from yo
 ### Install dependencies
 
 ```
-pip install edge-tts
+pipx install edge-tts
 sudo apt install xclip mpv
 ```
 
