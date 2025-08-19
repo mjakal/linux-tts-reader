@@ -122,7 +122,12 @@ class TTSPlayer:
         logging.info("First chunk synthesized. Launching mpv...")
         MPV_SOCKET_PATH.unlink(missing_ok=True)
         self.mpv_process = await asyncio.create_subprocess_exec(
-            "mpv", "--no-terminal", "--quiet", str(first_chunk_path),
+            "mpv",
+            "--no-terminal",
+            "--really-quiet",
+            "--no-audio-display",
+            "--no-terminal",
+            str(first_chunk_path),
             f"--input-ipc-server={MPV_SOCKET_PATH}"
         )
 
