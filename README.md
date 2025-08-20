@@ -58,7 +58,7 @@ The script can read from the **clipboard** or **direct command-line input**, and
 
 Clone and enter the repo:
 ```bash
-git clone https://github.com/your-username/linux-tts-reader.git
+git clone https://github.com/mjakal/linux-tts-reader.git
 cd linux-tts-reader
 ```
 
