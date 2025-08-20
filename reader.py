@@ -6,6 +6,9 @@ import re
 import subprocess
 import logging
 import io
+import argparse
+import sys
+import os
 
 import edge_tts
 import soundfile as sf
@@ -22,36 +25,28 @@ logging.basicConfig(
 
 
 class TTSPlayer:
-    def __init__(self, voice=DEFAULT_VOICE):
+    # --- MODIFIED: Accepts text during initialization ---
+    def __init__(self, text: str, voice=DEFAULT_VOICE):
         self.voice = voice
-        self.sentences = []
-
-    def _get_clipboard_text(self):
-        """Read primary selection from xclip"""
-        try:
-            text = (
-                subprocess.check_output(["xclip", "-out", "-selection", "primary"])
-                .decode("utf-8")
-                .strip()
-            )
+        # Process the incoming text into sentences
+        if text:
             self.sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s]
-        except Exception as e:
-            logging.error(f"Error reading clipboard: {e}")
+        else:
             self.sentences = []
+        self._current_play_obj = None
+
+    # --- REMOVED: _get_clipboard_text() is now handled in main() ---
 
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Generate WAV for a sentence in memory and return WaveObject"""
         communicate = edge_tts.Communicate(sentence, self.voice)
-
         audio_bytes = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_bytes += chunk["data"]
-
         buffer = io.BytesIO(audio_bytes)
         data, samplerate = sf.read(buffer, dtype="int16")
         raw_bytes = data.tobytes()
-
         return sa.WaveObject(
             raw_bytes,
             num_channels=data.shape[1] if len(data.shape) > 1 else 1,
@@ -60,36 +55,133 @@ class TTSPlayer:
         )
 
     async def run(self):
-        self._get_clipboard_text()
+        # --- MODIFIED: No longer gets text, just checks if it exists ---
         if not self.sentences:
-            logging.warning("No text found in clipboard.")
+            logging.warning("No sentences to process.")
             return
 
-        logging.info("Starting TTS playback...")
+        logging.info(f"Starting TTS playback with voice: {self.voice}")
+        try:
+            # Pre-generate the first sentence
+            prev_task = asyncio.create_task(self._synthesize_sentence(self.sentences[0]))
+            prev_wave = await prev_task
+            self._current_play_obj = prev_wave.play()
 
-        # Pre-generate the first sentence
-        prev_task = asyncio.create_task(self._synthesize_sentence(self.sentences[0]))
-        prev_wave = await prev_task
-        play_obj = prev_wave.play()
+            for sentence in self.sentences[1:]:
+                next_task = asyncio.create_task(self._synthesize_sentence(sentence))
+                self._current_play_obj.wait_done()
+                next_wave = await next_task
+                self._current_play_obj = next_wave.play()
 
-        for sentence in self.sentences[1:]:
-            # Start generating next sentence in parallel
-            next_task = asyncio.create_task(self._synthesize_sentence(sentence))
+            self._current_play_obj.wait_done()
+            logging.info("Playback finished.")
+        except asyncio.CancelledError:
+            logging.info("Playback cancelled.")
+            if self._current_play_obj:
+                self._current_play_obj.stop()
+        except KeyboardInterrupt:
+            logging.info("Interrupted by user.")
+            if self._current_play_obj:
+                self._current_play_obj.stop()
 
-            # Wait for previous playback to finish
-            play_obj.wait_done()
 
-            # Wait for next sentence to finish generating
-            next_wave = await next_task
+async def list_voices():
+    """Lists all available voices from the edge-tts library."""
+    print("Fetching available voices...")
+    try:
+        voices = await edge_tts.list_voices()
+        for voice in sorted(voices, key=lambda v: v['ShortName']):
+            print(f"  - {voice['ShortName']:<20} | Gender: {voice['Gender']}")
+    except Exception as e:
+        logging.error(f"Failed to list voices: {e}")
 
-            # Play next sentence
-            play_obj = next_wave.play()
+def stop_existing_instance():
+    """Finds and stops any running instance of this script using pkill."""
+    script_name = os.path.basename(__file__)
+    command = ["pkill", "-f", f"python.*{script_name}"]
+    logging.info(f"Attempting to stop all running instances of '{script_name}'...")
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode == 0:
+        logging.info("Success: A running instance was stopped.")
+    else:
+        logging.info("No running instance found.")
 
-        # Wait for last sentence to finish
-        play_obj.wait_done()
-        logging.info("Playback finished.")
 
+def main():
+    """Main entry point with argument parsing to control behavior."""
+    parser = argparse.ArgumentParser(
+        description="A tool to read text aloud using Edge TTS.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    
+    # --- Group for script actions (stop, list) ---
+    action_group = parser.add_mutually_exclusive_group()
+    action_group.add_argument(
+        "-s", "--stop", action="store_true",
+        help="Stop any running instance of this script and exit."
+    )
+    action_group.add_argument(
+        "-l", "--list-voices", action="store_true",
+        help="List all available voices and exit."
+    )
+
+    # --- MODIFIED: Group for text source ---
+    source_group = parser.add_mutually_exclusive_group()
+    source_group.add_argument(
+        "-t", "--text", type=str,
+        help="Provide the text to be read directly."
+    )
+    source_group.add_argument(
+        "-c", "--clipboard", action="store_true",
+        help="Read text from the clipboard (default behavior)."
+    )
+    
+    parser.add_argument(
+        "-v", "--voice", default=DEFAULT_VOICE,
+        help=f"The voice to use for speech synthesis.\nDefault: {DEFAULT_VOICE}"
+    )
+    args = parser.parse_args()
+
+    # --- Main Control Flow ---
+    if args.stop:
+        stop_existing_instance()
+        sys.exit(0)
+        
+    if args.list_voices:
+        asyncio.run(list_voices())
+        sys.exit(0)
+
+    # --- MODIFIED: Logic to determine text source ---
+    text_to_read = ""
+    if args.text:
+        logging.info("Reading text provided via -t argument.")
+        text_to_read = args.text
+    else:
+        # Default to clipboard if -t is not used, regardless of -c flag
+        logging.info("Reading text from clipboard.")
+        try:
+            text_to_read = (
+                subprocess.check_output(["xclip", "-out", "-selection", "primary"])
+                .decode("utf-8")
+                .strip()
+            )
+        except FileNotFoundError:
+            logging.error("`xclip` command not found. Please install it to use clipboard features.")
+            sys.exit(1)
+        except Exception as e:
+            logging.error(f"Could not read from clipboard: {e}")
+            sys.exit(1)
+
+    # --- MODIFIED: Pass text to the player's constructor ---
+    if not text_to_read:
+        logging.warning("No text to read. Exiting.")
+        sys.exit(0)
+        
+    player = TTSPlayer(text=text_to_read, voice=args.voice)
+    try:
+        asyncio.run(player.run())
+    except KeyboardInterrupt:
+        logging.info("Exited by user.")
 
 if __name__ == "__main__":
-    player = TTSPlayer()
-    asyncio.run(player.run())
+    main()
