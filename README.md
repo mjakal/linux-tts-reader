@@ -1,70 +1,153 @@
-# linux-tts-reader
+# 🎙️ Linux TTS Reader
 
-A simple Python-based text-to-speech (TTS) tool that reads selected text from your clipboard using Microsoft's Edge Neural voices via the `edge-tts` library. It supports background playback and can be controlled via keyboard shortcuts.
+A versatile, real-time **Python text-to-speech (TTS)** tool for Linux.  
+It reads text aloud using **Microsoft Edge Neural voices**, processing audio in memory for seamless, gap-free playback.  
 
-## Features
+The script can read from the **clipboard** or **direct command-line input**, and can be packaged into a standalone executable.
 
-- Text-to-speech using Microsoft's `edge-tts`
-- Reads selected (primary) text from clipboard
-- Voice selection by voice name
-- Plays audio using `mpv`
-- Starts and stops via custom keyboard shortcuts
-- Temporary files and subprocesses are cleaned up automatically
+---
 
-## Requirements
+## ✨ Features
 
-- Python 3.7+
-- Linux with X11 clipboard support (tested on Linux Mint)
-- `edge-tts` Python library
-- `xclip` (for clipboard access)
-- `mpv` (for audio playback)
+- **High-Quality Voices** – Uses Microsoft Edge Neural voices via the `edge-tts` library.  
+- **Flexible Input** – Read text from the clipboard or from a command-line argument.  
+- **Seamless Playback** – Synthesizes and plays audio in parallel (in memory) → no pauses.  
+- **Text Cleaning** – Removes extra whitespace & artifacts (can be disabled).  
+- **Standalone Build** – Easily packaged into a single executable with PyInstaller.  
+- **Controllable** – Start/stop/manage with flags → ideal for keyboard shortcuts.  
 
-### Install dependencies
+---
 
-```
-pipx install edge-tts
-sudo apt install xclip mpv
-```
+## 📦 Requirements
 
-## Usage
+- Python **3.7+**
+- Debian-based Linux (e.g., Ubuntu, Mint, Debian)
+- System tools for clipboard + audio playback
 
-### Clone the Repository
+### 🔧 Install Dependencies
 
-```
-git clone https://github.com/mjakal/linux-tts-reader.git
+1. **System Packages**  
+   ```bash
+   sudo apt update
+   sudo apt install -y libasound2-dev portaudio19-dev xclip
+   ```
+
+2. **Python Packages** (use a virtual environment if possible)
+
+   **`requirements.txt`**  
+   ```text
+   edge-tts
+   simpleaudio
+   soundfile
+   cleantext
+   ```
+
+   Install them:
+   ```bash
+   # Create and activate a venv (recommended)
+   python3 -m venv venv
+   source venv/bin/activate
+
+   # Install requirements
+   pip install -r requirements.txt
+   ```
+
+---
+
+## 🚀 Usage
+
+Clone and enter the repo:
+```bash
+git clone https://github.com/your-username/linux-tts-reader.git
 cd linux-tts-reader
 ```
-### Run Manually
 
-Copy any text to your primary clipboard (select it with your mouse).
+### Command-Line Examples
 
-```
-python3 reader.py -v en-US-EmmaNeural
-```
+- **Read from Clipboard (default)**  
+  ```bash
+  python3 reader.py
+  ```
+  or explicitly:
+  ```bash
+  python3 reader.py -c
+  ```
 
-You can list all available voices using:
+- **Read from Text Argument**  
+  ```bash
+  python3 reader.py -t "Hello world. This is a test."
+  ```
 
-```
-python3 reader.py -l
-```
+- **Change Voice**  
+  ```bash
+  python3 reader.py -v en-GB-SoniaNeural -t "Using a different voice now."
+  ```
 
-## Setting Up Keyboard Shortcuts (Linux Mint Cinnamon)
+- **List Available Voices**  
+  ```bash
+  python3 reader.py -l
+  ```
 
-### Start Reading (Assign a Shortcut)
+- **Stop a Running Instance**  
+  ```bash
+  python3 reader.py -s
+  ```
 
-1. Open Menu → Preferences → Keyboard
-2. Go to the Custom Shortcuts tab
-3. Click Add custom shortcut
-4. Enter the following:
-   - Name: Start TTS
-   - Command: python3 /full/path/to/reader.py -v en-US-EmmaNeural
-5. Click Apply, then assign a key combination (e.g., Ctrl+Alt+Q)
+- **Disable Text Cleaning**  
+  ```bash
+  python3 reader.py --no-clean -t "This text has   extra spaces and [tags]."
+  ```
 
-### Stop Reading (Assign a Shortcut)
+---
 
-1. Repeat the steps above to add another shortcut:
-   - Name: Stop TTS
-   - Command: python3 /full/path/to/reader.py -s
-2. Assign a different key combination (e.g., Ctrl+Alt+E)
+## 📦 Build a Standalone App (PyInstaller)
 
-These shortcuts allow you to start and stop TTS playback from anywhere on your desktop environment.
+1. **Ensure System Dependencies**
+   ```bash
+   sudo apt install -y libasound2-dev portaudio19-dev xclip
+   ```
+
+2. **Install PyInstaller**
+   ```bash
+   pip install pyinstaller
+   ```
+
+3. **Build Executable**
+   ```bash
+   pyinstaller --onefile --name tts-reader reader.py
+   ```
+
+4. **Run App**
+   ```bash
+   cd dist
+   chmod +x tts-reader
+   ./tts-reader -t "Hello from my new application!"
+   ```
+
+---
+
+## ⌨️ Setting Up Keyboard Shortcuts
+
+Bind the script (or built app) to **system-wide hotkeys**:
+
+1. Open system keyboard settings  
+   _(e.g., Mint: `Menu → Preferences → Keyboard → Shortcuts`)_
+
+2. Add custom shortcuts:
+
+   - **Start TTS**  
+     - **Name**: `Start TTS`  
+     - **Command**:  
+       - If built: `/full/path/to/dist/tts-reader`  
+       - From source: `python3 /full/path/to/reader.py`  
+       - _(optionally add flags like `-v en-US-EmmaNeural`)_
+     - **Binding**: `Ctrl+Alt+Q`
+
+   - **Stop TTS**  
+     - **Name**: `Stop TTS`  
+     - **Command**:  
+       - If built: `/full/path/to/dist/tts-reader -s`  
+       - From source: `python3 /full/path/to/reader.py -s`
+     - **Binding**: `Ctrl+Alt+E`
+
+---
