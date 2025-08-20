@@ -29,7 +29,6 @@ class TTSPlayer:
     def __init__(self, text: str, voice=DEFAULT_VOICE):
         self.voice = voice
         if text:
-            # Split text into sentences. This regex is better at handling various sentence endings.
             self.sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
         else:
             self.sentences = []
@@ -37,6 +36,7 @@ class TTSPlayer:
 
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Generate WAV for a sentence in memory and return WaveObject"""
+        # The redundant "Synthesizing..." log has been removed from this method.
         communicate = edge_tts.Communicate(sentence, self.voice)
         audio_bytes = b""
         async for chunk in communicate.stream():
@@ -58,26 +58,40 @@ class TTSPlayer:
             return
 
         logging.info(f"Starting TTS playback with voice: {self.voice}")
+        loop = asyncio.get_running_loop()
         try:
-            prev_task = asyncio.create_task(self._synthesize_sentence(self.sentences[0]))
-            prev_wave = await prev_task
-            self._current_play_obj = prev_wave.play()
+            current_wave = await self._synthesize_sentence(self.sentences[0])
 
-            for sentence in self.sentences[1:]:
-                next_task = asyncio.create_task(self._synthesize_sentence(sentence))
-                self._current_play_obj.wait_done()
-                next_wave = await next_task
-                self._current_play_obj = next_wave.play()
+            next_task = None
+            if len(self.sentences) > 1:
+                next_task = asyncio.create_task(self._synthesize_sentence(self.sentences[1]))
 
-            self._current_play_obj.wait_done()
+            logging.info(f"Reading: '{self.sentences[0]}'")
+            self._current_play_obj = current_wave.play()
+
+            for i in range(1, len(self.sentences)):
+                await loop.run_in_executor(None, self._current_play_obj.wait_done)
+
+                current_wave = await next_task
+
+                if i + 1 < len(self.sentences):
+                    next_task = asyncio.create_task(self._synthesize_sentence(self.sentences[i + 1]))
+                
+                logging.info(f"Reading: '{self.sentences[i]}'")
+                self._current_play_obj = current_wave.play()
+
+            if self._current_play_obj:
+                await loop.run_in_executor(None, self._current_play_obj.wait_done)
+
             logging.info("Playback finished.")
+
         except asyncio.CancelledError:
             logging.info("Playback cancelled.")
-            if self._current_play_obj:
+            if self._current_play_obj and self._current_play_obj.is_playing():
                 self._current_play_obj.stop()
         except KeyboardInterrupt:
             logging.info("Interrupted by user.")
-            if self._current_play_obj:
+            if self._current_play_obj and self._current_play_obj.is_playing():
                 self._current_play_obj.stop()
 
 
@@ -134,7 +148,6 @@ def main():
         "-v", "--voice", default=DEFAULT_VOICE,
         help=f"The voice to use for speech synthesis.\nDefault: {DEFAULT_VOICE}"
     )
-    # --- ADDED: Argument to disable cleaning ---
     parser.add_argument(
         "--no-clean", action="store_true",
         help="Disable the text cleaning process."
@@ -173,7 +186,6 @@ def main():
         logging.warning("No text to read. Exiting.")
         sys.exit(0)
     
-    # --- ADDED: Text cleaning step ---
     if not args.no_clean:
         logging.info("Cleaning text...")
         cleaned_text = cleantext.clean(
@@ -184,7 +196,6 @@ def main():
             punct=False,
             reg=r'\[.*?\]',
         )
-        # The clean function can sometimes strip all whitespace, so we re-join lines.
         text_to_read = " ".join(cleaned_text.split())
         logging.info("Text cleaned successfully.")
         
