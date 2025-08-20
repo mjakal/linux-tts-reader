@@ -4,22 +4,22 @@
 import asyncio
 import re
 import subprocess
-import sys
-import tempfile
-import atexit
 import logging
-from pathlib import Path
+import io
+
 import edge_tts
-import sounddevice as sd
 import soundfile as sf
+import simpleaudio as sa
+
+# --- Config ---
+DEFAULT_VOICE = "en-US-EmmaNeural"
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-DEFAULT_VOICE = "en-US-EmmaNeural"
 
 class TTSPlayer:
     def __init__(self, voice=DEFAULT_VOICE):
@@ -27,19 +27,37 @@ class TTSPlayer:
         self.sentences = []
 
     def _get_clipboard_text(self):
+        """Read primary selection from xclip"""
         try:
-            text = subprocess.check_output(
-                ['xclip', '-out', '-selection', 'primary']
-            ).decode('utf-8').strip()
-            self.sentences = [s for s in re.split(r'(?<=[.!?])\s+', text) if s]
+            text = (
+                subprocess.check_output(["xclip", "-out", "-selection", "primary"])
+                .decode("utf-8")
+                .strip()
+            )
+            self.sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s]
         except Exception as e:
             logging.error(f"Error reading clipboard: {e}")
             self.sentences = []
 
-    async def _synthesize_chunk(self, text: str, output_path: Path):
-        """Generate WAV chunk from edge-tts"""
-        communicate = edge_tts.Communicate(text, self.voice)
-        await communicate.save(str(output_path))
+    async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
+        """Generate WAV for a sentence in memory and return WaveObject"""
+        communicate = edge_tts.Communicate(sentence, self.voice)
+
+        audio_bytes = b""
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes += chunk["data"]
+
+        buffer = io.BytesIO(audio_bytes)
+        data, samplerate = sf.read(buffer, dtype="int16")
+        raw_bytes = data.tobytes()
+
+        return sa.WaveObject(
+            raw_bytes,
+            num_channels=data.shape[1] if len(data.shape) > 1 else 1,
+            bytes_per_sample=2,
+            sample_rate=samplerate,
+        )
 
     async def run(self):
         self._get_clipboard_text()
@@ -48,35 +66,29 @@ class TTSPlayer:
             return
 
         logging.info("Starting TTS playback...")
-        prev_task = None
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            for i, sentence in enumerate(self.sentences):
-                chunk_path = tmpdir / f"chunk_{i}.wav"
 
-                # Start synthesis for this chunk
-                task = asyncio.create_task(self._synthesize_chunk(sentence, chunk_path))
+        # Pre-generate the first sentence
+        prev_task = asyncio.create_task(self._synthesize_sentence(self.sentences[0]))
+        prev_wave = await prev_task
+        play_obj = prev_wave.play()
 
-                # Wait for previous chunk to finish, then play
-                if prev_task:
-                    await prev_task
-                    self._play_wav(prev_path)
+        for sentence in self.sentences[1:]:
+            # Start generating next sentence in parallel
+            next_task = asyncio.create_task(self._synthesize_sentence(sentence))
 
-                prev_path = chunk_path
-                prev_task = task
+            # Wait for previous playback to finish
+            play_obj.wait_done()
 
-            # Play last chunk
-            if prev_task:
-                await prev_task
-                self._play_wav(prev_path)
+            # Wait for next sentence to finish generating
+            next_wave = await next_task
 
+            # Play next sentence
+            play_obj = next_wave.play()
+
+        # Wait for last sentence to finish
+        play_obj.wait_done()
         logging.info("Playback finished.")
 
-    def _play_wav(self, path: Path):
-        """Stream WAV file via sounddevice"""
-        data, samplerate = sf.read(str(path), dtype='float32')
-        sd.play(data, samplerate)
-        sd.wait()  # Wait for playback to finish
 
 if __name__ == "__main__":
     player = TTSPlayer()
