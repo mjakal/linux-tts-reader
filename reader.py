@@ -106,10 +106,21 @@ async def list_voices():
         logging.error(f"Failed to list voices: {e}")
 
 def stop_existing_instance():
-    """Finds and stops any running instance of this script using pkill."""
-    script_name = os.path.basename(__file__)
-    command = ["pkill", "-f", f"python.*{script_name}"]
-    logging.info(f"Attempting to stop all running instances of '{script_name}'...")
+    """Finds and stops any running instance of this script, whether running
+    as a python script or a PyInstaller executable."""
+    
+    # Check if the script is running as a PyInstaller bundle
+    if getattr(sys, 'frozen', False):
+        # If it is, the process name is the executable's name
+        script_name = os.path.basename(sys.executable)
+        command = ["pkill", "-f", f"./{script_name}"]
+        logging.info(f"Attempting to stop all running instances of '{script_name}'...")
+    else:
+        # If running as a .py script, find the python process
+        script_name = os.path.basename(__file__)
+        command = ["pkill", "-f", f"python.*{script_name}"]
+        logging.info(f"Attempting to stop all running instances of '{script_name}'...")
+
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
         logging.info("Success: A running instance was stopped.")
