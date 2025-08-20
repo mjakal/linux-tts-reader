@@ -13,6 +13,7 @@ import os
 import edge_tts
 import soundfile as sf
 import simpleaudio as sa
+import cleantext
 
 # --- Config ---
 DEFAULT_VOICE = "en-US-EmmaNeural"
@@ -25,17 +26,14 @@ logging.basicConfig(
 
 
 class TTSPlayer:
-    # --- MODIFIED: Accepts text during initialization ---
     def __init__(self, text: str, voice=DEFAULT_VOICE):
         self.voice = voice
-        # Process the incoming text into sentences
         if text:
-            self.sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s]
+            # Split text into sentences. This regex is better at handling various sentence endings.
+            self.sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
         else:
             self.sentences = []
         self._current_play_obj = None
-
-    # --- REMOVED: _get_clipboard_text() is now handled in main() ---
 
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Generate WAV for a sentence in memory and return WaveObject"""
@@ -55,14 +53,12 @@ class TTSPlayer:
         )
 
     async def run(self):
-        # --- MODIFIED: No longer gets text, just checks if it exists ---
         if not self.sentences:
             logging.warning("No sentences to process.")
             return
 
         logging.info(f"Starting TTS playback with voice: {self.voice}")
         try:
-            # Pre-generate the first sentence
             prev_task = asyncio.create_task(self._synthesize_sentence(self.sentences[0]))
             prev_wave = await prev_task
             self._current_play_obj = prev_wave.play()
@@ -114,7 +110,6 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter
     )
     
-    # --- Group for script actions (stop, list) ---
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument(
         "-s", "--stop", action="store_true",
@@ -125,7 +120,6 @@ def main():
         help="List all available voices and exit."
     )
 
-    # --- MODIFIED: Group for text source ---
     source_group = parser.add_mutually_exclusive_group()
     source_group.add_argument(
         "-t", "--text", type=str,
@@ -140,9 +134,14 @@ def main():
         "-v", "--voice", default=DEFAULT_VOICE,
         help=f"The voice to use for speech synthesis.\nDefault: {DEFAULT_VOICE}"
     )
+    # --- ADDED: Argument to disable cleaning ---
+    parser.add_argument(
+        "--no-clean", action="store_true",
+        help="Disable the text cleaning process."
+    )
+    
     args = parser.parse_args()
 
-    # --- Main Control Flow ---
     if args.stop:
         stop_existing_instance()
         sys.exit(0)
@@ -151,13 +150,11 @@ def main():
         asyncio.run(list_voices())
         sys.exit(0)
 
-    # --- MODIFIED: Logic to determine text source ---
     text_to_read = ""
     if args.text:
         logging.info("Reading text provided via -t argument.")
         text_to_read = args.text
     else:
-        # Default to clipboard if -t is not used, regardless of -c flag
         logging.info("Reading text from clipboard.")
         try:
             text_to_read = (
@@ -172,10 +169,24 @@ def main():
             logging.error(f"Could not read from clipboard: {e}")
             sys.exit(1)
 
-    # --- MODIFIED: Pass text to the player's constructor ---
     if not text_to_read:
         logging.warning("No text to read. Exiting.")
         sys.exit(0)
+    
+    # --- ADDED: Text cleaning step ---
+    if not args.no_clean:
+        logging.info("Cleaning text...")
+        cleaned_text = cleantext.clean(
+            text_to_read,
+            extra_spaces=True,
+            lowercase=False,
+            numbers=False,
+            punct=False,
+            reg=r'\[.*?\]',
+        )
+        # The clean function can sometimes strip all whitespace, so we re-join lines.
+        text_to_read = " ".join(cleaned_text.split())
+        logging.info("Text cleaned successfully.")
         
     player = TTSPlayer(text=text_to_read, voice=args.voice)
     try:
