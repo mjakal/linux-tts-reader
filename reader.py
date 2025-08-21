@@ -14,9 +14,11 @@ import edge_tts
 import soundfile as sf
 import simpleaudio as sa
 import cleantext
+import setproctitle
 
 # --- Config ---
 DEFAULT_VOICE = "en-US-EmmaNeural"
+PROCESS_NAME = "tts-reader-service"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +38,6 @@ class TTSPlayer:
 
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Generate WAV for a sentence in memory and return WaveObject"""
-        # The redundant "Synthesizing..." log has been removed from this method.
         communicate = edge_tts.Communicate(sentence, self.voice)
         audio_bytes = b""
         async for chunk in communicate.stream():
@@ -71,12 +72,9 @@ class TTSPlayer:
 
             for i in range(1, len(self.sentences)):
                 await loop.run_in_executor(None, self._current_play_obj.wait_done)
-
                 current_wave = await next_task
-
                 if i + 1 < len(self.sentences):
                     next_task = asyncio.create_task(self._synthesize_sentence(self.sentences[i + 1]))
-                
                 logging.info(f"Reading: '{self.sentences[i]}'")
                 self._current_play_obj = current_wave.play()
 
@@ -85,12 +83,8 @@ class TTSPlayer:
 
             logging.info("Playback finished.")
 
-        except asyncio.CancelledError:
-            logging.info("Playback cancelled.")
-            if self._current_play_obj and self._current_play_obj.is_playing():
-                self._current_play_obj.stop()
-        except KeyboardInterrupt:
-            logging.info("Interrupted by user.")
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            logging.info("Playback interrupted.")
             if self._current_play_obj and self._current_play_obj.is_playing():
                 self._current_play_obj.stop()
 
@@ -106,21 +100,9 @@ async def list_voices():
         logging.error(f"Failed to list voices: {e}")
 
 def stop_existing_instance():
-    """Finds and stops any running instance of this script, whether running
-    as a python script or a PyInstaller executable."""
-    
-    # Check if the script is running as a PyInstaller bundle
-    if getattr(sys, 'frozen', False):
-        # If it is, the process name is the executable's name
-        script_name = os.path.basename(sys.executable)
-        command = ["pkill", "-f", f"./{script_name}"]
-        logging.info(f"Attempting to stop all running instances of '{script_name}'...")
-    else:
-        # If running as a .py script, find the python process
-        script_name = os.path.basename(__file__)
-        command = ["pkill", "-f", f"python.*{script_name}"]
-        logging.info(f"Attempting to stop all running instances of '{script_name}'...")
-
+    """Finds and stops any running instance of this script by its unique process name."""
+    command = ["pkill", "-f", PROCESS_NAME]
+    logging.info(f"Attempting to stop all running instances of '{PROCESS_NAME}'...")
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode == 0:
         logging.info("Success: A running instance was stopped.")
@@ -174,6 +156,9 @@ def main():
         asyncio.run(list_voices())
         sys.exit(0)
 
+    # Set the unique process name for the playback instance.
+    setproctitle.setproctitle(PROCESS_NAME)
+
     text_to_read = ""
     if args.text:
         logging.info("Reading text provided via -t argument.")
@@ -215,6 +200,7 @@ def main():
         asyncio.run(player.run())
     except KeyboardInterrupt:
         logging.info("Exited by user.")
+
 
 if __name__ == "__main__":
     main()

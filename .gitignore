@@ -1,4 +1,7 @@
 /build
-/dist
-ttsreader.spec
+/reader.build
+/reader.dist
+/reader.onefile-build
+*.bin
+*.spec
 

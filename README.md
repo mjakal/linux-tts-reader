@@ -151,3 +151,18 @@ Bind the script (or built app) to **system-wide hotkeys**:
      - **Binding**: `Ctrl+Alt+E`
 
 ---
+
+You can build the script using nuitka.
+
+```
+# conda virtual env
+conda create --name tts --no-default-packages python=3.9
+conda activate tts
+
+# install requirements
+pip install -r requirements.txt
+pip install nuitka
+
+# Build the script
+python -m nuitka --onefile --follow-imports --static-libpython=no --plugin-enable=anti-bloat reader.py
+```
