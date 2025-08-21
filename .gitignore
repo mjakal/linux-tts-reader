@@ -2,6 +2,6 @@
 /reader.build
 /reader.dist
 /reader.onefile-build
-*.bin
+reader.bin
 *.spec
 
