@@ -9,12 +9,13 @@ import io
 import argparse
 import sys
 import os
+import tempfile # --- 1. IMPORT THE tempfile LIBRARY ---
 
 import edge_tts
-import soundfile as sf
 import simpleaudio as sa
 import cleantext
 import setproctitle
+import audioread
 
 # --- Config ---
 DEFAULT_VOICE = "en-US-EmmaNeural"
@@ -36,6 +37,7 @@ class TTSPlayer:
             self.sentences = []
         self._current_play_obj = None
 
+    # --- 2. THIS METHOD IS REWRITTEN TO USE A TEMP FILE ---
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Generate WAV for a sentence in memory and return WaveObject"""
         communicate = edge_tts.Communicate(sentence, self.voice)
@@ -43,13 +45,27 @@ class TTSPlayer:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_bytes += chunk["data"]
-        buffer = io.BytesIO(audio_bytes)
-        data, samplerate = sf.read(buffer, dtype="int16")
-        raw_bytes = data.tobytes()
+
+        # Create a temporary file that is automatically deleted when closed
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as f:
+            f.write(audio_bytes)
+            f.flush()  # Ensure all data is written to the file
+
+            # Now, open the temporary file's path with audioread
+            with audioread.audio_open(f.name) as audio_file:
+                channels = audio_file.channels
+                samplerate = audio_file.samplerate
+                
+                raw_bytes = b''
+                for buf in audio_file:
+                    raw_bytes += buf
+
+        # The temporary file is now automatically deleted
+        bytes_per_sample = 2  # Assuming 16-bit audio
         return sa.WaveObject(
             raw_bytes,
-            num_channels=data.shape[1] if len(data.shape) > 1 else 1,
-            bytes_per_sample=2,
+            num_channels=channels,
+            bytes_per_sample=bytes_per_sample,
             sample_rate=samplerate,
         )
 
