@@ -5,17 +5,16 @@ import asyncio
 import re
 import subprocess
 import logging
-import io
 import argparse
 import sys
 import os
-import tempfile # --- 1. IMPORT THE tempfile LIBRARY ---
 
 import edge_tts
+import miniaudio
+from miniaudio import SampleFormat
 import simpleaudio as sa
 import cleantext
 import setproctitle
-import audioread
 
 # --- Config ---
 DEFAULT_VOICE = "en-US-EmmaNeural"
@@ -27,7 +26,6 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-
 class TTSPlayer:
     def __init__(self, text: str, voice=DEFAULT_VOICE):
         self.voice = voice
@@ -36,39 +34,30 @@ class TTSPlayer:
         else:
             self.sentences = []
         self._current_play_obj = None
-
-    # --- 2. THIS METHOD IS REWRITTEN TO USE A TEMP FILE ---
+    
+    # --- USES miniaudio FOR DECODING ---
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
-        """Generate WAV for a sentence in memory and return WaveObject"""
+        """Synthesizes and decodes audio, returning a simpleaudio object."""
         communicate = edge_tts.Communicate(sentence, self.voice)
         audio_bytes = b""
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 audio_bytes += chunk["data"]
-
-        # Create a temporary file that is automatically deleted when closed
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=True) as f:
-            f.write(audio_bytes)
-            f.flush()  # Ensure all data is written to the file
-
-            # Now, open the temporary file's path with audioread
-            with audioread.audio_open(f.name) as audio_file:
-                channels = audio_file.channels
-                samplerate = audio_file.samplerate
-                
-                raw_bytes = b''
-                for buf in audio_file:
-                    raw_bytes += buf
-
-        # The temporary file is now automatically deleted
-        bytes_per_sample = 2  # Assuming 16-bit audio
+        
+        audio_data = miniaudio.decode(
+            audio_bytes,
+            output_format=SampleFormat.SIGNED16
+        )
+        
+        # Convert the decoded data into a simpleaudio WaveObject
         return sa.WaveObject(
-            raw_bytes,
-            num_channels=channels,
-            bytes_per_sample=bytes_per_sample,
-            sample_rate=samplerate,
+            audio_data.samples.tobytes(),
+            num_channels=audio_data.nchannels,
+            bytes_per_sample=audio_data.sample_width,
+            sample_rate=audio_data.sample_rate,
         )
 
+    # --- USES simpleaudio FOR RELIABLE, PARALLEL PLAYBACK ---
     async def run(self):
         if not self.sentences:
             logging.warning("No sentences to process.")
@@ -172,7 +161,6 @@ def main():
         asyncio.run(list_voices())
         sys.exit(0)
 
-    # Set the unique process name for the playback instance.
     setproctitle.setproctitle(PROCESS_NAME)
 
     text_to_read = ""
@@ -216,7 +204,6 @@ def main():
         asyncio.run(player.run())
     except KeyboardInterrupt:
         logging.info("Exited by user.")
-
 
 if __name__ == "__main__":
     main()
