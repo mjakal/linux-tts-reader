@@ -36,10 +36,11 @@ The script can read from the **clipboard** or **direct command-line input**, and
 
    **`requirements.txt`**  
    ```text
+   cleantext
    edge-tts
    simpleaudio
    soundfile
-   cleantext
+   setproctitle
    ```
 
    Install them:
@@ -47,6 +48,11 @@ The script can read from the **clipboard** or **direct command-line input**, and
    # Create and activate a venv (recommended)
    python3 -m venv venv
    source venv/bin/activate
+
+   # Conda
+   conda remove --name tts --all
+   conda create --name tts --no-default-packages python=3.9
+   conda activate tts
 
    # Install requirements
    pip install -r requirements.txt
@@ -107,17 +113,26 @@ cd linux-tts-reader
    sudo apt install -y libasound2-dev portaudio19-dev xclip
    ```
 
-2. **Install PyInstaller**
+2. **Install Build Tools – Choose Your Preferred Option**
    ```bash
+   # PyInstaller
    pip install pyinstaller
+   
+   # Nuitka
+   pip install nuitka
    ```
 
-3. **Build Executable**
+3. **Build Executable - PyInstaller**
    ```bash
    pyinstaller --onefile --name tts-reader reader.py
    ```
 
-4. **Run App**
+4. **Build Executable - Nuitka**
+   ```bash
+   python -m nuitka --onefile --follow-imports --static-libpython=no --plugin-enable=anti-bloat reader.py
+   ```
+
+5. **Run App**
    ```bash
    cd dist
    chmod +x tts-reader
@@ -154,15 +169,4 @@ Bind the script (or built app) to **system-wide hotkeys**:
 
 You can build the script using nuitka.
 
-```
-# conda virtual env
-conda create --name tts --no-default-packages python=3.9
-conda activate tts
-
-# install requirements
-pip install -r requirements.txt
-pip install nuitka
-
-# Build the script
-python -m nuitka --onefile --follow-imports --static-libpython=no --plugin-enable=anti-bloat reader.py
 ```
