@@ -29,43 +29,40 @@ logging.basicConfig(
 class TTSPlayer:
     def __init__(self, text: str, voice=DEFAULT_VOICE):
         self.voice = voice
-        # --- Use the new intelligent chunking method ---
-        self.sentences = self._split_into_chunks(text)
+        # --- Use the new simplified splitting and merging method ---
+        self.sentences = self._split_and_merge_sentences(text)
         self._current_play_obj = None
 
-    def _split_into_chunks(self, text: str, target_words: int = 20, max_words: int = 35):
-        """Splits text into manageable chunks for smoother TTS playback."""
+    def _split_and_merge_sentences(self, text: str, min_words_to_merge: int = 6):
+        """Splits text by sentence, then merges short sentences with the next one."""
+        # 1. Split into complete sentences using punctuation
         sentences = re.split(r'(?<=[.!?])\s+', text)
-        chunks = []
+        if not sentences:
+            return []
 
-        for sentence in sentences:
-            words = sentence.split()
-            if not words:
+        merged_sentences = []
+        i = 0
+        while i < len(sentences):
+            current_sentence = sentences[i].strip()
+            if not current_sentence:
+                i += 1
                 continue
 
-            if len(words) <= max_words:
-                chunks.append(sentence)
-                continue
-
-            current_pos = 0
-            while current_pos < len(words):
-                end_pos = min(current_pos + target_words, len(words))
-                break_pos = -1
-                
-                # Look for punctuation backwards from the end position
-                for i in range(min(end_pos, len(words) - 1), current_pos, -1):
-                    if words[i].endswith((',', ';', ':', '—')):
-                        break_pos = i + 1
-                        break
-                
-                if break_pos == -1:
-                    break_pos = end_pos
-                
-                chunk_words = words[current_pos:break_pos]
-                chunks.append(" ".join(chunk_words))
-                current_pos = break_pos
+            # 2. If a sentence is short and isn't the last one, merge it with the next.
+            if len(current_sentence.split()) < min_words_to_merge and (i + 1) < len(sentences):
+                next_sentence = sentences[i + 1].strip()
+                if next_sentence:
+                    merged_sentences.append(current_sentence + " " + next_sentence)
+                    i += 2  # Skip the next sentence since we've merged it
+                else:
+                    merged_sentences.append(current_sentence)
+                    i += 2
+            else:
+                # 3. Otherwise, just add the sentence as is.
+                merged_sentences.append(current_sentence)
+                i += 1
         
-        return [c.strip() for c in chunks if c.strip()]
+        return [s for s in merged_sentences if s]
 
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Synthesizes and decodes audio, returning a simpleaudio object."""
