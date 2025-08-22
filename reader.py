@@ -29,13 +29,44 @@ logging.basicConfig(
 class TTSPlayer:
     def __init__(self, text: str, voice=DEFAULT_VOICE):
         self.voice = voice
-        if text:
-            self.sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-        else:
-            self.sentences = []
+        # --- Use the new intelligent chunking method ---
+        self.sentences = self._split_into_chunks(text)
         self._current_play_obj = None
-    
-    # --- USES miniaudio FOR DECODING ---
+
+    def _split_into_chunks(self, text: str, target_words: int = 20, max_words: int = 35):
+        """Splits text into manageable chunks for smoother TTS playback."""
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        chunks = []
+
+        for sentence in sentences:
+            words = sentence.split()
+            if not words:
+                continue
+
+            if len(words) <= max_words:
+                chunks.append(sentence)
+                continue
+
+            current_pos = 0
+            while current_pos < len(words):
+                end_pos = min(current_pos + target_words, len(words))
+                break_pos = -1
+                
+                # Look for punctuation backwards from the end position
+                for i in range(min(end_pos, len(words) - 1), current_pos, -1):
+                    if words[i].endswith((',', ';', ':', '—')):
+                        break_pos = i + 1
+                        break
+                
+                if break_pos == -1:
+                    break_pos = end_pos
+                
+                chunk_words = words[current_pos:break_pos]
+                chunks.append(" ".join(chunk_words))
+                current_pos = break_pos
+        
+        return [c.strip() for c in chunks if c.strip()]
+
     async def _synthesize_sentence(self, sentence: str) -> sa.WaveObject:
         """Synthesizes and decodes audio, returning a simpleaudio object."""
         communicate = edge_tts.Communicate(sentence, self.voice)
@@ -49,7 +80,6 @@ class TTSPlayer:
             output_format=SampleFormat.SIGNED16
         )
         
-        # Convert the decoded data into a simpleaudio WaveObject
         return sa.WaveObject(
             audio_data.samples.tobytes(),
             num_channels=audio_data.nchannels,
@@ -57,7 +87,6 @@ class TTSPlayer:
             sample_rate=audio_data.sample_rate,
         )
 
-    # --- USES simpleaudio FOR RELIABLE, PARALLEL PLAYBACK ---
     async def run(self):
         if not self.sentences:
             logging.warning("No sentences to process.")

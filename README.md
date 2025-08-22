@@ -20,7 +20,7 @@ The script can read from the **clipboard** or **direct command-line input**, and
 
 ## 📦 Requirements
 
-- Python **3.7+**
+- Python **3.9+**
 - Debian-based Linux (e.g., Ubuntu, Mint, Debian)
 - System tools for clipboard + audio playback
 
@@ -38,9 +38,10 @@ The script can read from the **clipboard** or **direct command-line input**, and
    ```text
    cleantext
    edge-tts
+   miniaudio
    simpleaudio
-   soundfile
    setproctitle
+
    ```
 
    Install them:
@@ -129,7 +130,7 @@ cd linux-tts-reader
 
 4. **Build Executable - Nuitka**
    ```bash
-   python -m nuitka --onefile --follow-imports --static-libpython=no --plugin-enable=anti-bloat reader.py
+   python -m nuitka --onefile --follow-imports --static-libpython=no --include-module=_cffi_backend reader.py
    ```
 
 5. **Run App**
