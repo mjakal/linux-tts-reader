@@ -125,7 +125,10 @@ cd linux-tts-reader
 
 3. **Build Executable - PyInstaller**
    ```bash
-   pyinstaller --onefile --name tts-reader reader.py
+   pyinstaller --onefile \
+   --hidden-import=_cffi_backend \
+   --add-data '/home/dev/nltk_data:nltk_data' \
+   reader.py
    ```
 
 4. **Build Executable - Nuitka**
@@ -134,7 +137,7 @@ cd linux-tts-reader
    python3 -c "import nltk; print(nltk.data.path[0])"
    
    # Build command
-   ython -m nuitka --onefile \
+   python -m nuitka --onefile \
    --static-libpython=no \
    --lto=yes \
    --plugin-enable=anti-bloat \
