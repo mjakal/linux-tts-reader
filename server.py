@@ -148,6 +148,17 @@ class TTSServer:
                 self.current_player_task = asyncio.create_task(self.current_player.run())
                 response = "Reading started"
 
+            elif command == 'list_voices':
+                try:
+                    voices = await edge_tts.list_voices()
+                    # Format: "ShortName (Gender)"
+                    voice_list = "\n".join(
+                        [f"{v['ShortName']} ({v['Gender']})" for v in sorted(voices, key=lambda x: x['ShortName'])]
+                    )
+                    response = voice_list
+                except Exception as e:
+                    response = f"Error fetching voices: {e}"
+
             else:
                 response = "Unknown command"
 

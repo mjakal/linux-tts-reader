@@ -1,198 +1,153 @@
-# 🎙️ Linux TTS Reader
+# 🎙️ Linux TTS Reader (Client-Server Architecture)
 
-A versatile, real-time **Python text-to-speech (TTS)** tool for Linux.  
-It reads text aloud using **Microsoft Edge Neural voices**, processing audio in memory for seamless, gap-free playback.  
+A blazing fast, real-time **Text-to-Speech (TTS)** tool for Linux.
 
-The script can read from the **clipboard** or **direct command-line input**, and can be packaged into a standalone executable.
+It uses a **Client/Server architecture** to solve the "cold start" problem of Python audio libraries.
+
+1. **Server (Python):** Runs in the background, keeping heavy AI voice models and audio drivers loaded in memory.
+2. **Client (Bash):** A lightweight (<2KB) script that starts instantly, sends text to the server via a local socket, and exits.
 
 ---
 
 ## ✨ Features
 
-- **High-Quality Voices** – Uses Microsoft Edge Neural voices via the `edge-tts` library.  
-- **Flexible Input** – Read text from the clipboard or from a command-line argument.  
-- **Seamless Playback** – Synthesizes and plays audio in parallel (in memory) → no pauses.  
-- **Text Cleaning** – Removes extra whitespace & artifacts (can be disabled).  
-- **Standalone Build** – Easily packaged into a single executable with PyInstaller.  
-- **Controllable** – Start/stop/manage with flags → ideal for keyboard shortcuts.  
+* **Instant Startup** – No Python loading lag. The Bash client executes in milliseconds.
+* **Zero Configuration** – The client automatically launches the server if it's not running.
+* **High-Quality Voices** – Uses **Microsoft Edge Neural voices** (free, no API key required).
+* **Gapless Playback** – Synthesizes and buffers audio in parallel.
+* **Smart Clipboard Reading** – Reads selected text (highlight) or clipboard content.
+* **Text Cleaning** – Removes extra whitespace & artifacts automatically.
 
 ---
 
 ## 📦 Requirements
 
-- Python **3.9+**
-- Debian-based Linux (e.g., Ubuntu, Mint, Debian)
-- System tools for clipboard + audio playback
+### 1. System Tools (Client & Server)
+You need `jq` (for JSON), `netcat` (for socket communication), and audio libraries.
 
-### 🔧 Install Dependencies
+```bash
+sudo apt update
+sudo apt install -y libasound2-dev portaudio19-dev xclip jq netcat-openbsd
+```
 
-1. **System Packages**  
-   ```bash
-   sudo apt update
-   sudo apt install -y libasound2-dev portaudio19-dev xclip
-   ```
+### 2. Python Dependencies (Server Build Only)
+To compile the server, you need the following Python environment.
 
-2. **Python Packages** (use a virtual environment if possible)
+**`requirements.txt`**
+```text
+cleantext
+edge-tts
+miniaudio
+simpleaudio
+setproctitle
+nuitka
+```
 
-   **`requirements.txt`**  
-   ```text
-   cleantext
-   edge-tts
-   miniaudio
-   simpleaudio
-   setproctitle
+---
 
-   ```
+## 🛠️ Build & Setup
 
-   Install them:
-   ```bash
-   # Create and activate a venv (recommended)
-   python3 -m venv venv
-   source venv/bin/activate
+You will create two files in the same directory (e.g., `~/bin/`):
+1.  `tts-server` (Compiled Python binary)
+2.  `tts-client` (Bash script)
 
-   # Conda
-   conda remove --name tts --all
-   conda create --name tts --no-default-packages python=3.9
-   conda activate tts
+### Step 1: Compile the Server
+The server handles the heavy lifting. We compile it using Nuitka to create a standalone binary.
 
-   # Install requirements
-   pip install -r requirements.txt
-   ```
+**Note:** Adjust the `--include-data-dir` path to match your NLTK data location.
+
+```bash
+# Get path to nltk_data if you don't know it
+python3 -c "import nltk; print(nltk.data.path[0])"
+
+# Compile server.py
+python3 -m nuitka --onefile \
+   --lto=yes \
+   --plugin-enable=anti-bloat \
+   --follow-imports \
+   --include-module=_cffi_backend \
+   --include-package-data=certifi \
+   --include-data-dir=/home/dev/nltk_data=nltk_data \
+   server.py \
+   -o tts-server
+```
+
+### Step 2: Setup the Client
+No compilation needed! Just rename `client.sh` and make it executable.
+
+```bash
+cp client.sh tts-client
+chmod +x tts-client
+```
+
+### Step 3: Deployment
+Move both files to a folder in your system `$PATH` so you can run them from anywhere.
+
+```bash
+mkdir -p ~/bin
+mv tts-server ~/bin/
+mv tts-client ~/bin/
+# Ensure ~/bin is in your PATH, or reference full path in shortcuts
+```
 
 ---
 
 ## 🚀 Usage
 
-Clone and enter the repo:
-```bash
-git clone https://github.com/mjakal/linux-tts-reader.git
-cd linux-tts-reader
-```
+Since the client automatically starts the server, you just run the client.
 
-### Command-Line Examples
-
-- **Read from Clipboard (default)**  
+- **Read from Primary Selection (Highlight)** - *Default behavior*
   ```bash
-  python3 reader.py
-  ```
-  or explicitly:
-  ```bash
-  python3 reader.py -c
+  tts-client
   ```
 
-- **Read from Text Argument**  
+- **Read specific text**
   ```bash
-  python3 reader.py -t "Hello world. This is a test."
+  tts-client -t "Hello, this is a test sentence."
   ```
 
-- **Change Voice**  
+- **Stop playback immediately**
   ```bash
-  python3 reader.py -v en-GB-SoniaNeural -t "Using a different voice now."
+  tts-client -s
   ```
 
-- **List Available Voices**  
+- **List available voices**
   ```bash
-  python3 reader.py -l
+  tts-client -l
   ```
 
-- **Stop a Running Instance**  
+- **Change Voice**
   ```bash
-  python3 reader.py -s
+  tts-client -v "en-GB-SoniaNeural"
   ```
-
-- **Disable Text Cleaning**  
-  ```bash
-  python3 reader.py --no-clean -t "This text has   extra spaces and [tags]."
-  ```
-
----
-
-## 📦 Build a Standalone App (PyInstaller)
-
-1. **Ensure System Dependencies**
-   ```bash
-   sudo apt install -y libasound2-dev portaudio19-dev xclip
-   ```
-
-2. **Install Build Tools – Choose Your Preferred Option**
-   ```bash
-   # PyInstaller
-   pip install pyinstaller
-   
-   # Nuitka
-   pip install nuitka
-   ```
-
-3. **Build Executable - PyInstaller**
-   ```bash
-   pyinstaller --onefile \
-   --hidden-import=_cffi_backend \
-   --add-data '/home/dev/nltk_data:nltk_data' \
-   reader.py
-   ```
-
-4. **Build Executable - Nuitka server**
-   ```bash
-   # Get path to nltk_data
-   python3 -c "import nltk; print(nltk.data.path[0])"
-   
-   # Build command
-   python -m nuitka --onefile \
-   --static-libpython=no \
-   --lto=yes \
-   --plugin-enable=anti-bloat \
-   --follow-imports \
-   --include-module=_cffi_backend \
-   --include-data-dir=/home/dev/nltk_data=nltk_data \
-   server.py \
-   -o tts-server
-   ```
-5. **Build Executable - Nuitka tts-client**
-   ```bash
-   # Build command
-   python -m nuitka --onefile \
-   --static-libpython=no \
-   --lto=yes \
-   --plugin-enable=anti-bloat \
-   client.py \
-   -o tts-client
-   ```
-
-6. **Run App**
-   ```bash
-   cd dist
-   chmod +x tts-reader
-   ./tts-reader -t "Hello from my new application!"
-   ```
 
 ---
 
 ## ⌨️ Setting Up Keyboard Shortcuts
 
-Bind the script (or built app) to **system-wide hotkeys**:
+Bind the script to **system-wide hotkeys** (e.g., in Linux Mint/Ubuntu Settings):
 
-1. Open system keyboard settings  
-   _(e.g., Mint: `Menu → Preferences → Keyboard → Shortcuts`)_
+1.  **Read Selection**
+    * **Command:** `/home/username/bin/tts-client`
+    * **Key:** `Ctrl+Alt+Q`
 
-2. Add custom shortcuts:
-
-   - **Start TTS**  
-     - **Name**: `Start TTS`  
-     - **Command**:  
-       - If built: `/full/path/to/dist/tts-reader`  
-       - From source: `python3 /full/path/to/reader.py`  
-       - _(optionally add flags like `-v en-US-EmmaNeural`)_
-     - **Binding**: `Ctrl+Alt+Q`
-
-   - **Stop TTS**  
-     - **Name**: `Stop TTS`  
-     - **Command**:  
-       - If built: `/full/path/to/dist/tts-reader -s`  
-       - From source: `python3 /full/path/to/reader.py -s`
-     - **Binding**: `Ctrl+Alt+E`
+2.  **Stop Reading**
+    * **Command:** `/home/username/bin/tts-client -s`
+    * **Key:** `Ctrl+Alt+E`
 
 ---
 
-You can build the script using nuitka.
+## 🔧 Troubleshooting
 
+**Server won't start?**
+The client suppresses server logs. To debug, try running the server manually in a terminal:
+```bash
+./tts-server
+```
+If it crashes, check for missing NLTK data or SSL certificate errors (common with Nuitka builds).
+
+**Server stuck?**
+If the server process gets stuck, you can force kill it:
+```bash
+pkill -f tts-server
 ```
