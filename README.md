@@ -131,7 +131,7 @@ cd linux-tts-reader
    reader.py
    ```
 
-4. **Build Executable - Nuitka**
+4. **Build Executable - Nuitka server**
    ```bash
    # Get path to nltk_data
    python3 -c "import nltk; print(nltk.data.path[0])"
@@ -144,10 +144,21 @@ cd linux-tts-reader
    --follow-imports \
    --include-module=_cffi_backend \
    --include-data-dir=/home/dev/nltk_data=nltk_data \
-   reader.py
+   server.py \
+   -o tts-server
+   ```
+5. **Build Executable - Nuitka tts-client**
+   ```bash
+   # Build command
+   python -m nuitka --onefile \
+   --static-libpython=no \
+   --lto=yes \
+   --plugin-enable=anti-bloat \
+   client.py \
+   -o tts-client
    ```
 
-5. **Run App**
+6. **Run App**
    ```bash
    cd dist
    chmod +x tts-reader
