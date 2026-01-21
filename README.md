@@ -63,6 +63,7 @@ python3 -c "import nltk; print(nltk.data.path[0])"
 # Compile server.py
 python3 -m nuitka --onefile \
    --lto=yes \
+   --static-libpython=no \
    --plugin-enable=anti-bloat \
    --follow-imports \
    --include-module=_cffi_backend \
